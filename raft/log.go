@@ -2,16 +2,20 @@ package raft
 
 import (
 	"errors"
-	log_store "sxg/toydb_go/storage/log"
+	store "sxg/toydb_go/storage/log"
 )
 
 type Log struct {
-	producer    log_store.EntryProducer
-	store       log_store.Store
+	producer    store.EntryProducer
+	store       store.Store
 	lastIndex   uint64
 	lastTerm    uint64
 	commitIndex uint64
 	commitTerm  uint64
+}
+
+func (log *Log) saveTerm(term uint64, votedFor string) error {
+	return nil
 }
 
 func (log *Log) append(term uint64, command []byte) (index uint64, _ error) {
@@ -25,7 +29,7 @@ func (log *Log) append(term uint64, command []byte) (index uint64, _ error) {
 	return
 }
 
-func (log *Log) batchAppend(entries []log_store.Entry) (index uint64, _ error) {
+func (log *Log) batchAppend(entries []store.Entry) (index uint64, _ error) {
 	for _, entry := range entries {
 		if _, err := log.append(entry.Term(), entry.Command()); err != nil {
 			return 0, err
@@ -54,21 +58,21 @@ func (log *Log) truncate(index uint64) error {
 	return nil
 }
 
-func (log *Log) get(index uint64) (log_store.Entry, bool) {
+func (log *Log) get(index uint64) (store.Entry, bool) {
 	return log.store.Get(index)
 }
 
-func (log *Log) has(index uint64) bool {
-	_, ok := log.store.Get(index)
-	return ok
+func (log *Log) has(index, term uint64) bool {
+	entry, ok := log.store.Get(index)
+	return ok && entry.Term() == term
 }
 
-func (log *Log) scan(start, end uint64) log_store.Scan {
+func (log *Log) scan(start, end uint64) store.Scan {
 	return log.store.Scan(start, end)
 }
 
 //日志必须连续，且第一个日志的index最大为lastIndex+1
-func (log *Log) splice(entries []log_store.Entry) (uint64, error) {
+func (log *Log) splice(entries []store.Entry) (uint64, error) {
 	var l int
 	if l = len(entries); l == 0 {
 		return log.lastIndex, nil
@@ -101,7 +105,7 @@ func (log *Log) splice(entries []log_store.Entry) (uint64, error) {
 	return log.lastIndex, nil
 }
 
-func NewLog(producer log_store.EntryProducer, store log_store.Store) (log *Log, _ error) {
+func NewLog(producer store.EntryProducer, store store.Store) (log *Log, _ error) {
 	log = &Log{producer: producer, store: store}
 	//committed index, term
 	if ci := store.Commited(); ci == 0 {
