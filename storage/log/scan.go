@@ -1,8 +1,12 @@
 package log
 
+import (
+	"sxg/toydb_go/grpc/proto"
+)
+
 type ScanImpl struct {
 	start, end uint64
-	entries    []Entry
+	entries    []*proto.Entry
 	current    int
 }
 
@@ -18,7 +22,7 @@ func (si *ScanImpl) Len() int {
 	return len(si.entries)
 }
 
-func (si *ScanImpl) Iterator() (Entry, bool) {
+func (si *ScanImpl) Iterator() (*proto.Entry, bool) {
 	l := len(si.entries)
 	if si.current >= l {
 		return nil, false

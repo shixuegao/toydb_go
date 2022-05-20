@@ -1,11 +1,11 @@
 package raft
 
 import (
-	store "sxg/toydb_go/storage/log"
+	"sxg/toydb_go/grpc/proto"
 )
 
 type Instruction any
 
 type InstructionApply struct {
-	entry store.Entry
+	Entry *proto.Entry
 }

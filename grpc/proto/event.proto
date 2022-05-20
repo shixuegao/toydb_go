@@ -1,0 +1,89 @@
+syntax="proto3";
+
+package proto;
+import "grpc/proto/entry.proto";
+option go_package = "proto/";
+
+//事件类型
+enum EventType {
+    HEARTBEAT = 0;
+    CONFIRM_LEADER = 1;
+    SOLICIT_VOTE = 2;
+    GRANT_VOTE = 3;
+    REPLICATE_ENTRIES = 4;
+    ACCEPT_ENTRIES = 5;
+    REJECT_ENTRIES = 6;
+    CLIENT_REQUEST = 7;
+    CLIENT_RESPONSE = 8;
+}
+
+message HeartbeatEvent {
+    EventType event_type = 1;
+    uint64 commit_index = 2;
+    uint64 commit_term = 3;
+}
+
+message ConfirmleaderEvent {
+    EventType event_type = 1;
+    uint64 commit_index = 2;
+    bool has_committed = 3;
+}
+
+message SolicitVoteEvent {
+    EventType event_type = 1;
+    uint64 last_index = 2;
+    uint64 last_term = 3;
+}
+
+message GrantVoteEvent {
+    EventType event_type = 1;
+}
+
+message ReplicateEntriesEvent {
+    EventType event_type = 1;
+    uint64 base_index = 2;
+    uint64 base_term = 3;
+    repeated Entry entries = 4;
+}
+
+message RejectEntriesEvent {
+    EventType event_type = 1;
+}
+
+message AcceptEntriesEvent {
+    EventType event_type = 1;
+    uint64 last_index = 2;
+}
+
+//请求类型
+enum ReqType {
+    QUERY = 0;
+    MUTATE = 1;
+    STATUS = 2;
+}
+
+message Status {
+    string server = 1;
+    string leader = 2;
+    uint64 term = 3;
+    uint64 commit_index = 4;
+    uint64 apply_index = 5;
+    string storage = 6;
+    uint64 storage_size = 7;
+    map<string, uint64> node_last_index = 8;
+}
+
+message ClientRequestEvent {
+    EventType event_type = 1;
+    string id = 2;
+    ReqType request_type = 3;
+    bytes command = 4;
+}
+
+message ClientResponseEvent {
+    EventType event_type = 1;
+    string id = 2;
+    ReqType request_type = 3;
+    bytes result = 4; //当request_type = QUERY、MUTATE的时
+    Status status = 5; //当request_type = STATUS时
+}

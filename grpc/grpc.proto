@@ -2,9 +2,7 @@ syntax = "proto3";
 
 package grpc;
 option go_package = "grpc/";
-import "grpc/proto/proto.proto";
 
 service Grpc {
-    rpc EmitVote(proto.VoteRequest) returns (proto.VoteResponse) {} //发起投票
-    rpc AppendEntry(proto.AppendRequest) returns (proto.AppendResponse) {} //发送数据
+    
 }
