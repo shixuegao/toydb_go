@@ -2,6 +2,8 @@ syntax="proto3";
 
 package proto;
 import "grpc/proto/entry.proto";
+// import "proto/entry.proto";
+import "google/protobuf/any.proto";
 option go_package = "proto/";
 
 //事件类型
@@ -18,48 +20,52 @@ enum EventType {
 }
 
 message HeartbeatEvent {
-    EventType event_type = 1;
-    uint64 commit_index = 2;
-    uint64 commit_term = 3;
+    uint64 commit_index = 1;
+    uint64 commit_term = 2;
 }
 
 message ConfirmleaderEvent {
-    EventType event_type = 1;
-    uint64 commit_index = 2;
-    bool has_committed = 3;
+    uint64 commit_index = 1;
+    bool has_committed = 2;
 }
 
 message SolicitVoteEvent {
-    EventType event_type = 1;
-    uint64 last_index = 2;
-    uint64 last_term = 3;
+    uint64 last_index = 1;
+    uint64 last_term = 2;
 }
 
-message GrantVoteEvent {
-    EventType event_type = 1;
-}
+message GrantVoteEvent {}
 
 message ReplicateEntriesEvent {
-    EventType event_type = 1;
-    uint64 base_index = 2;
-    uint64 base_term = 3;
-    repeated Entry entries = 4;
+    uint64 base_index = 1;
+    uint64 base_term = 2;
+    repeated Entry entries = 3;
 }
 
-message RejectEntriesEvent {
-    EventType event_type = 1;
-}
+message RejectEntriesEvent {}
 
 message AcceptEntriesEvent {
-    EventType event_type = 1;
-    uint64 last_index = 2;
+    uint64 last_index = 1;
 }
 
 //请求类型
 enum ReqType {
-    QUERY = 0;
-    MUTATE = 1;
-    STATUS = 2;
+    REQ_QUERY = 0;
+    REQ_MUTATE = 1;
+    REQ_STATUS = 2;
+}
+
+message ClientRequestEvent {
+    string id = 1;
+    ReqType request_type = 2;
+    bytes command = 3;
+}
+
+//回复类型
+enum RespType {
+    RESP_STATUS = 0;
+    RESP_STATE = 1;
+    RESP_ABORT = 2;
 }
 
 message Status {
@@ -73,17 +79,16 @@ message Status {
     map<string, uint64> node_last_index = 8;
 }
 
-message ClientRequestEvent {
-    EventType event_type = 1;
-    string id = 2;
-    ReqType request_type = 3;
-    bytes command = 4;
+message State {
+    bytes result = 1;
+}
+
+message Abort {
+    string reason = 1;
 }
 
 message ClientResponseEvent {
-    EventType event_type = 1;
-    string id = 2;
-    ReqType request_type = 3;
-    bytes result = 4; //当request_type = QUERY、MUTATE的时
-    Status status = 5; //当request_type = STATUS时
+    string id = 1;
+    RespType response_type = 2;
+    google.protobuf.Any content = 3; // status, state, abort
 }

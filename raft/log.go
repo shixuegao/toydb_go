@@ -15,8 +15,17 @@ type Log struct {
 	commitTerm  uint64
 }
 
+//返回store的名称和大小
+func (log *Log) StoreInfo() (string, int) {
+	return log.store.String(), log.store.Size()
+}
+
 func (log *Log) SaveTerm(term uint64, votedFor string) error {
 	return nil
+}
+
+func (log *Log) LoadTerm() (uint64, string) {
+	return 0, ""
 }
 
 func (log *Log) Append(term uint64, command []byte) (index uint64, _ error) {
@@ -71,7 +80,7 @@ func (log *Log) Truncate(index uint64) error {
 	return nil
 }
 
-func (log *Log) Get(index uint64) (proto.Entry, bool) {
+func (log *Log) Get(index uint64) (*proto.Entry, bool) {
 	return log.store.Get(index)
 }
 

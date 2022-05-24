@@ -2,6 +2,8 @@ syntax="proto3";
 
 package proto;
 import "google/protobuf/any.proto";
+import "grpc/proto/event.proto";
+// import "proto/event.proto";
 option go_package = "proto/";
 
 enum AddrType {
@@ -17,8 +19,9 @@ message Address {
 }
 
 message Message {
-    uint64 term = 1;
-    Address from = 2;
-    Address to = 3;
-    google.protobuf.Any event = 4;
+    EventType event_type = 1;
+    uint64 term = 2;
+    Address from = 3;
+    Address to = 4;
+    google.protobuf.Any event = 5;
 }

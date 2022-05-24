@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sxg/toydb_go/grpc/proto"
 	"sxg/toydb_go/raft"
+
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type follower struct {
@@ -28,7 +30,7 @@ func (fol *follower) becomeFollower(leader string, term uint64) error {
 	}
 	fol.leader = leader
 	fol.votedFor = votedFor
-	if err := fol.comm.node.abortProxied(); err != nil {
+	if err := fol.comm.node.abortProxied("follower converts to follower"); err != nil {
 		return fmt.Errorf("abort proxied failed: %s", err.Error())
 	}
 	if err := fol.comm.node.forwardQueued(address(proto.AddrType_PEER, leader)); err != nil {
@@ -37,26 +39,22 @@ func (fol *follower) becomeFollower(leader string, term uint64) error {
 	return nil
 }
 
-func (fol *follower) step(msg *proto.Message) {
+func (fol *follower) step(input *raft.InputMsg) {
 	//如果信息是其他节点发过来的，且对方的Term比本地的大或者本地leader为空，则考虑重置当前节点，并继续处理msg
 	//这里保证follower能够跟随当前最高的Term
+	msg := input.Msg
 	if msg.From.AddrType == proto.AddrType_PEER &&
 		(msg.Term > fol.comm.term() || fol.leader == "") {
 		if err := fol.becomeFollower(msg.From.Peer, msg.Term); err != nil {
 			fol.comm.logger.Error(err.Error())
 		}
-		fol.comm.step(msg)
+		fol.step(input)
 		return
 	}
 	if fol.leader == msg.From.Peer {
 		//ticks
 	}
-	event, err := msg.Event.UnmarshalNew()
-	if err != nil {
-		fol.comm.logger.Errorf("unknow proto message: %s", err.Error())
-		return
-	}
-	switch v := event.(type) {
+	switch v := input.Event.(type) {
 	case *proto.HeartbeatEvent:
 		if fol.leader != msg.From.Peer {
 			return
@@ -78,8 +76,7 @@ func (fol *follower) step(msg *proto.Message) {
 				fol.comm.node.sendIns(ins)
 			}
 		}
-		event = &proto.ConfirmleaderEvent{
-			EventType:    proto.EventType_CONFIRM_LEADER,
+		event := &proto.ConfirmleaderEvent{
 			CommitIndex:  v.CommitIndex,
 			HasCommitted: has,
 		}
@@ -97,7 +94,7 @@ func (fol *follower) step(msg *proto.Message) {
 		}
 		if msg.From.AddrType == proto.AddrType_PEER {
 			fol.comm.logger.Infof("voting for %s in term %d election", msg.From.Peer, fol.comm.term())
-			event := &proto.GrantVoteEvent{EventType: proto.EventType_GRANT_VOTE}
+			event := &proto.GrantVoteEvent{}
 			if err := fol.comm.node.send(msg.From, event); err != nil {
 				fol.comm.logger.Errorf("send grant vote event failed: %s", err.Error())
 				return
@@ -118,7 +115,6 @@ func (fol *follower) step(msg *proto.Message) {
 				return
 			}
 			event := &proto.AcceptEntriesEvent{
-				EventType: proto.EventType_ACCEPT_ENTRIES,
 				LastIndex: lastIndex,
 			}
 			fol.comm.node.send(msg.From, event)
@@ -135,11 +131,13 @@ func (fol *follower) step(msg *proto.Message) {
 			}
 		} else {
 			//将客户端的请求先保存下来，之后再转发出去
-			fol.comm.node.storeClientRequestsQueue(msg.From, msg.Event)
+			fol.comm.node.storeClientRequests(msg.From, v)
 		}
 	case *proto.ClientResponseEvent:
-		if v.RequestType == proto.ReqType_STATUS {
-			v.Status.Server = fol.comm.id()
+		if v.ResponseType == proto.RespType_RESP_STATUS {
+			status := input.ClientResponseContent.(*proto.Status)
+			status.Server = fol.comm.id()
+			v.Content, _ = anypb.New(status)
 		}
 		fol.comm.node.unregisterProxiedRequest(v.Id)
 		addr := &proto.Address{AddrType: proto.AddrType_CLIENT}

@@ -9,13 +9,14 @@ import (
 )
 
 func Test(t *testing.T) {
-	event := &proto.GrantVoteEvent{EventType: proto.EventType_GRANT_VOTE}
+	event := &proto.GrantVoteEvent{}
 	anyyy, _ := anypb.New(event)
 	msg := &proto.Message{
-		Term:  0,
-		From:  nil,
-		To:    nil,
-		Event: anyyy,
+		EventType: proto.EventType_GRANT_VOTE,
+		Term:      0,
+		From:      nil,
+		To:        nil,
+		Event:     anyyy,
 	}
 
 	eve, _ := msg.Event.UnmarshalNew()

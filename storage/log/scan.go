@@ -31,3 +31,16 @@ func (si *ScanImpl) Iterator() (*proto.Entry, bool) {
 	si.current++
 	return b, true
 }
+
+func (si *ScanImpl) Split(start uint64, end uint64) []*proto.Entry {
+	if start < end {
+		panic("start index bigger than end index")
+	}
+	if start < si.start {
+		panic("start index out of boundry")
+	}
+	if end > si.end {
+		panic("end index out of boundry")
+	}
+	return si.entries[start-si.start : end-si.start+1]
+}

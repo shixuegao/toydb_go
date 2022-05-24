@@ -24,10 +24,10 @@ type Commission struct {
 }
 
 type role interface {
-	step(*proto.Message)
+	step(*raft.InputMsg)
 }
 
-func NewCommission(node *Node, logger logging.Logger) *Commission {
+func newCommission(node *Node, logger logging.Logger) *Commission {
 	comm := &Commission{
 		node:   node,
 		logger: logger,
@@ -69,7 +69,11 @@ func (comm *Commission) step(msg *proto.Message) {
 		comm.logger.Errorf("ignore invalid message: %s", err.Error())
 		return
 	}
-	comm.roles[comm.roleType].step(msg)
+	if innerMsg, err := raft.VerifyAndWrap(msg); err != nil {
+		comm.logger.Error(err.Error())
+	} else {
+		comm.roles[comm.roleType].step(innerMsg)
+	}
 }
 
 func (comm *Commission) validate(msg *proto.Message) error {
@@ -79,18 +83,14 @@ func (comm *Commission) validate(msg *proto.Message) error {
 	case proto.AddrType_LOCAL:
 		return errors.New("message from local node")
 	case proto.AddrType_CLIENT:
-		if ok, err := isMsgSpecifiedEvents([]proto.EventType{proto.EventType_CLIENT_REQUEST}, msg); err != nil {
-			return err
-		} else if !ok {
+		if msg.EventType != proto.EventType_CLIENT_REQUEST {
 			return errors.New("non-request message from client")
 		}
 	}
 	//此处将任期比自己小的信息(除客户端的请求或响应外)给屏蔽掉
 	if msg.GetTerm() < comm.term() {
-		types := []proto.EventType{proto.EventType_CLIENT_REQUEST, proto.EventType_CLIENT_RESPONSE}
-		if ok, err := isMsgSpecifiedEvents(types, msg); err != nil {
-			return err
-		} else if !ok {
+		if !(msg.EventType == proto.EventType_CLIENT_REQUEST ||
+			msg.EventType == proto.EventType_CLIENT_RESPONSE) {
 			return errors.New("message from past term")
 		}
 	}
@@ -103,42 +103,6 @@ func (comm *Commission) validate(msg *proto.Message) error {
 		return errors.New("received message for client")
 	}
 	return nil
-}
-
-func isMsgSpecifiedEvents(eventTypes []proto.EventType, msg *proto.Message) (bool, error) {
-	event, err := msg.Event.UnmarshalNew()
-	if err != nil {
-		return false, err
-	}
-	var ok bool
-	for _, eventType := range eventTypes {
-		switch eventType {
-		case proto.EventType_HEARTBEAT:
-			_, ok = event.(*proto.HeartbeatEvent)
-		case proto.EventType_CONFIRM_LEADER:
-			_, ok = event.(*proto.ConfirmleaderEvent)
-		case proto.EventType_SOLICIT_VOTE:
-			_, ok = event.(*proto.SolicitVoteEvent)
-		case proto.EventType_GRANT_VOTE:
-			_, ok = event.(*proto.GrantVoteEvent)
-		case proto.EventType_REPLICATE_ENTRIES:
-			_, ok = event.(*proto.ReplicateEntriesEvent)
-		case proto.EventType_ACCEPT_ENTRIES:
-			_, ok = event.(*proto.AcceptEntriesEvent)
-		case proto.EventType_REJECT_ENTRIES:
-			_, ok = event.(*proto.RejectEntriesEvent)
-		case proto.EventType_CLIENT_REQUEST:
-			_, ok = event.(*proto.ClientRequestEvent)
-		case proto.EventType_CLIENT_RESPONSE:
-			_, ok = event.(*proto.ClientResponseEvent)
-		default:
-			return false, errors.New("unknown event type of message")
-		}
-		if ok {
-			return true, nil
-		}
-	}
-	return ok, nil
 }
 
 func address(addrType proto.AddrType, peer string) *proto.Address {
