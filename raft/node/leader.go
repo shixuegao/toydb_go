@@ -125,6 +125,7 @@ func (lea *leader) step(input *raft.InputMsg) {
 	}
 	switch v := event.(type) {
 	case *proto.ConfirmleaderEvent:
+		//值得继续分析InstructionVote的目的
 		if msg.From.AddrType == proto.AddrType_PEER {
 			ins := &raft.InstructionVote{
 				Term:  msg.Term,

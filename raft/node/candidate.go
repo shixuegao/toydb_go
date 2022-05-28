@@ -100,7 +100,7 @@ func (can *candidate) step(input *raft.InputMsg) {
 					Event: event,
 				}
 				lea := can.comm.curRole().(*leader)
-				lea.step(&raft.InputMsg{msg, event, nil})
+				lea.step(&raft.InputMsg{Msg: msg, Event: event, ClientResponseContent: nil})
 			}
 		}
 	case *proto.ClientRequestEvent:
