@@ -1,7 +1,7 @@
 syntax="proto3";
 
 package proto;
-option go_package = "proto/";
+option go_package = "./grpc/proto;proto"; // 分号前面表示生成的位置, 分号后面表示包名
 
 message Entry {
     uint64 index = 1;

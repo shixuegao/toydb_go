@@ -2,13 +2,13 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sxg/toydb_go/grpc/proto"
 	logging "sxg/toydb_go/logging"
 	"sxg/toydb_go/raft"
 	"sync"
 
+	"github.com/pkg/errors"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -19,19 +19,24 @@ type clientRequestWrapper struct {
 }
 
 type Node struct {
-	context         context.Context
-	id              string
-	peers           []string
-	term            uint64
-	log             *raft.Log
-	msgSender       chan<- *proto.Message
-	insSender       chan<- raft.Instruction
+	context context.Context
+	id      string
+	peers   []string
+	term    uint64
+	log     *raft.Log
+	// 到时候需要将Peer通道和客户通道区分开来, 不让客户通道影响Peer通道
+	caseOutC        chan<- *raft.Case
+	insOutC         chan<- raft.Instruction
 	clientRequests  []*clientRequestWrapper
 	proxiedRequests map[string]*proto.Address
 	logger          logging.Logger
-	comm            *Commission
+	comm            *commission
 	wg              *sync.WaitGroup
 	dri             *raft.Driver
+}
+
+func (n *Node) Step(cas *raft.Case) {
+	n.comm.step(cas)
 }
 
 func (n *Node) abortProxied(reason string) error {
@@ -43,8 +48,8 @@ func (n *Node) abortProxied(reason string) error {
 			Id:      n.id,
 			Content: abort,
 		}
-		if err := n.send(addr, event); err != nil {
-			n.logger.Errorf("sending abort to client failed: %s", err.Error())
+		if err := n.send(0, addr, event); err != nil {
+			n.logger.Errorf("sending abort to client failed: %+v", errors.WithStack(err))
 		}
 	}
 	return nil
@@ -66,14 +71,14 @@ func (n *Node) forwardQueued(leader *proto.Address) error {
 			To:    leader,
 			Event: eve,
 		}
-		n.msgSender <- msg
+		n.caseOutC <- &raft.Case{Msg: msg, Event: v}
 	}
 
 	return nil
 }
 
 //发送信息到peer节点
-func (n *Node) send(to *proto.Address, event any) (err error) {
+func (n *Node) send(caseId uint64, to *proto.Address, event any) (err error) {
 	from := &proto.Address{AddrType: proto.AddrType_LOCAL}
 	var v protoreflect.ProtoMessage
 	var eve *anypb.Any
@@ -91,12 +96,12 @@ func (n *Node) send(to *proto.Address, event any) (err error) {
 		To:    to,
 		Event: eve,
 	}
-	n.msgSender <- msg
+	n.caseOutC <- &raft.Case{ID: caseId, Msg: msg, Event: v}
 	return nil
 }
 
 func (n *Node) sendIns(ins raft.Instruction) {
-	n.insSender <- ins
+	n.insOutC <- ins
 }
 
 func (n *Node) registerProxiedRequest(id string, addr *proto.Address) {
@@ -122,14 +127,14 @@ func (n *Node) quorum() int {
 	return (len(n.peers)+1)/2 + 1
 }
 
-func NewNode(context context.Context, id string, peers []string, msgSender chan<- *proto.Message,
+func NewNode(context context.Context, id string, peers []string, caseOutC chan<- *raft.Case,
 	log *raft.Log, state raft.State, logger logging.Logger) (*Node, error) {
 	appliedIndex := state.AppliedIndex()
 	commitIndex, _ := log.CommitIndexAndTerm()
 	if appliedIndex > commitIndex {
 		return nil, fmt.Errorf("state machine applied index %d greater than log commit %d", appliedIndex, commitIndex)
 	}
-	insSender := make(chan raft.Instruction)
+	insOutC := make(chan raft.Instruction)
 	term, votedFor := log.LoadTerm()
 	node := &Node{
 		context:         context,
@@ -138,8 +143,8 @@ func NewNode(context context.Context, id string, peers []string, msgSender chan<
 		term:            term,
 		log:             log,
 		logger:          logger,
-		msgSender:       msgSender,
-		insSender:       insSender,
+		caseOutC:        caseOutC,
+		insOutC:         insOutC,
 		clientRequests:  []*clientRequestWrapper{},
 		proxiedRequests: map[string]*proto.Address{},
 		wg:              new(sync.WaitGroup),
@@ -154,7 +159,7 @@ func NewNode(context context.Context, id string, peers []string, msgSender chan<
 		(comm.curRole().(*leader)).reset(peers, lastIndex)
 	}
 	//driver
-	node.dri = raft.NewDriver(node.context, insSender, node.msgSender, logger)
+	node.dri = raft.NewDriver(node.context, insOutC, node.caseOutC, logger)
 	node.dri.Drive(state, node.wg)
 	return node, nil
 }

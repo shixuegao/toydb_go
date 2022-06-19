@@ -4,11 +4,12 @@ import (
 	"sxg/toydb_go/grpc/proto"
 	"sxg/toydb_go/raft"
 
+	"github.com/pkg/errors"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type candidate struct {
-	comm  *Commission
+	comm  *commission
 	votes int
 }
 
@@ -45,7 +46,7 @@ func (can *candidate) becomeLeader() error {
 		CommitIndex: commitIndex,
 		CommitTerm:  commitTerm,
 	}
-	if err := lea.comm.node.send(addr, event); err != nil {
+	if err := lea.comm.node.send(0, addr, event); err != nil {
 		return err
 	}
 	if _, err := lea.append([]byte{}); err != nil {
@@ -57,27 +58,27 @@ func (can *candidate) becomeLeader() error {
 	return nil
 }
 
-func (can *candidate) step(input *raft.InputMsg) {
-	msg := input.Msg
+func (can *candidate) step(cas *raft.Case) {
+	msg := cas.Msg
 	if msg.Term > can.comm.term() &&
 		msg.From.AddrType == proto.AddrType_PEER {
 		if err := can.becomeFollower(msg.From.Peer, msg.Term); err != nil {
-			can.comm.logger.Errorf("candidate convert to follower failed: %s", err.Error())
+			can.comm.logger.Errorf("candidate convert to follower failed: %+v", errors.WithStack(err))
 			return
 		}
 		fol := can.comm.curRole().(*follower)
-		fol.step(input)
+		fol.step(cas)
 		return
 	}
-	switch v := input.Event.(type) {
+	switch v := cas.Event.(type) {
 	case *proto.HeartbeatEvent:
 		if msg.From.AddrType == proto.AddrType_PEER {
 			if err := can.becomeFollower(msg.From.Peer, msg.Term); err != nil {
-				can.comm.logger.Errorf("candidate convert to follower failed: %s", err.Error())
+				can.comm.logger.Errorf("candidate convert to follower failed: %+v", errors.WithStack(err))
 				return
 			}
 			fol := can.comm.curRole().(*follower)
-			fol.step(input)
+			fol.step(cas)
 			return
 		}
 	case *proto.GrantVoteEvent:
@@ -87,7 +88,7 @@ func (can *candidate) step(input *raft.InputMsg) {
 			requests := can.comm.node.resetClientRequests()
 			can.comm.logger.Infof("won election for term %d, become leader", can.comm.term())
 			if err := can.becomeLeader(); err != nil {
-				can.comm.logger.Errorf("candidate convert to leader failed: %s", err.Error())
+				can.comm.logger.Errorf("candidate convert to leader failed: %+v", errors.WithStack(err))
 				return
 			}
 			//当前节点升级为leader，将客户端的请求转发至本地
@@ -100,21 +101,21 @@ func (can *candidate) step(input *raft.InputMsg) {
 					Event: event,
 				}
 				lea := can.comm.curRole().(*leader)
-				lea.step(&raft.InputMsg{Msg: msg, Event: event, ClientResponseContent: nil})
+				lea.step(&raft.Case{ID: cas.ID, Msg: msg, Event: event, RespContent: nil})
 			}
 		}
 	case *proto.ClientRequestEvent:
 		can.comm.node.storeClientRequests(msg.From, v)
 	case *proto.ClientResponseEvent:
 		if v.ResponseType == proto.RespType_RESP_STATUS {
-			status := input.ClientResponseContent.(*proto.Status)
+			status := cas.RespContent.(*proto.Status)
 			status.Server = can.comm.id()
 			v.Content, _ = anypb.New(status)
 		}
 		can.comm.node.unregisterProxiedRequest(v.Id)
 		addr := &proto.Address{AddrType: proto.AddrType_CLIENT}
-		if err := can.comm.node.send(addr, v); err != nil {
-			can.comm.logger.Errorf("send client response event failed: %s", err.Error())
+		if err := can.comm.node.send(cas.ID, addr, v); err != nil {
+			can.comm.logger.Errorf("send client response event failed: %+v", errors.WithStack(err))
 		}
 	case *proto.SolicitVoteEvent: //do nothing
 	case *proto.ConfirmleaderEvent, *proto.ReplicateEntriesEvent, *proto.AcceptEntriesEvent, *proto.RejectEntriesEvent:

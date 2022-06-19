@@ -8,13 +8,22 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-type InputMsg struct {
-	Msg                   *proto.Message
-	Event                 protoreflect.ProtoMessage //已经解码好的proto结构体，可以直接用
-	ClientResponseContent protoreflect.ProtoMessage //已经解码好的客户端响应proto结构体，可以直接用
+// case
+type Case struct {
+	// case id
+	ID uint64
+	// protobuf信息
+	Msg *proto.Message
+	// 是否超时
+	Timeout bool
+	//已经解码好的proto结构体，可以直接用
+	Event protoreflect.ProtoMessage
+	//已经解码好的客户端响应proto结构体，可以直接用
+	RespContent protoreflect.ProtoMessage
 }
 
-func VerifyAndWrap(msg *proto.Message) (*InputMsg, error) {
+func VerifyAndWrap(cas *Case) (*Case, error) {
+	msg := cas.Msg
 	event, err := msg.Event.UnmarshalNew()
 	if err != nil {
 		return nil, err
@@ -51,7 +60,10 @@ func VerifyAndWrap(msg *proto.Message) (*InputMsg, error) {
 	if !matched {
 		return nil, fmt.Errorf("unexpected event, need type %v, the real is %v", msg.EventType, event)
 	}
-	return &InputMsg{msg, event, content}, nil
+	res := *cas
+	res.Event = event
+	res.RespContent = content
+	return &res, nil
 }
 
 func VerifyClientResponse(event *proto.ClientResponseEvent) (v protoreflect.ProtoMessage, err error) {

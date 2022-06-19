@@ -1,11 +1,12 @@
 package node
 
 import (
-	"errors"
 	"fmt"
 	"sxg/toydb_go/grpc/proto"
 	logging "sxg/toydb_go/logging"
 	"sxg/toydb_go/raft"
+
+	"github.com/pkg/errors"
 )
 
 type roleType int32
@@ -16,7 +17,7 @@ const (
 	Leader
 )
 
-type Commission struct {
+type commission struct {
 	node     *Node
 	logger   logging.Logger
 	roleType roleType
@@ -24,11 +25,11 @@ type Commission struct {
 }
 
 type role interface {
-	step(*raft.InputMsg)
+	step(*raft.Case)
 }
 
-func newCommission(node *Node, logger logging.Logger) *Commission {
-	comm := &Commission{
+func newCommission(node *Node, logger logging.Logger) *commission {
+	comm := &commission{
 		node:   node,
 		logger: logger,
 	}
@@ -40,43 +41,44 @@ func newCommission(node *Node, logger logging.Logger) *Commission {
 	return comm
 }
 
-func (comm *Commission) curRole() role {
+func (comm *commission) curRole() role {
 	return comm.roles[comm.roleType]
 }
 
-func (comm *Commission) setRole(roleType roleType) {
+func (comm *commission) setRole(roleType roleType) {
 	comm.roleType = roleType
 }
 
-func (comm *Commission) term() uint64 {
+func (comm *commission) term() uint64 {
 	return comm.node.term
 }
 
-func (comm *Commission) setTerm(term uint64) {
+func (comm *commission) setTerm(term uint64) {
 	comm.node.term = term
 }
 
-func (comm *Commission) id() string {
+func (comm *commission) id() string {
 	return comm.node.id
 }
 
-func (comm *Commission) log() *raft.Log {
+func (comm *commission) log() *raft.Log {
 	return comm.node.log
 }
 
-func (comm *Commission) step(msg *proto.Message) {
-	if err := comm.validate(msg); err != nil {
-		comm.logger.Errorf("ignore invalid message: %s", err.Error())
+func (comm *commission) step(cas *raft.Case) {
+	if err := comm.validate(cas); err != nil {
+		comm.logger.Errorf("ignore invalid message: %+v", errors.WithStack(err))
 		return
 	}
-	if innerMsg, err := raft.VerifyAndWrap(msg); err != nil {
+	if innerMsg, err := raft.VerifyAndWrap(cas); err != nil {
 		comm.logger.Error(err.Error())
 	} else {
 		comm.roles[comm.roleType].step(innerMsg)
 	}
 }
 
-func (comm *Commission) validate(msg *proto.Message) error {
+func (comm *commission) validate(cas *raft.Case) error {
+	msg := cas.Msg
 	switch msg.From.AddrType {
 	case proto.AddrType_PEERS:
 		return errors.New("message from broadcast address")

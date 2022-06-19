@@ -1,8 +1,9 @@
 syntax = "proto3";
 
 package grpc;
-option go_package = "grpc/";
+import "grpc/proto/message.proto";
+option go_package = "./grpc;grpc";
 
 service Grpc {
-    
+  rpc Exchange(proto.Message) returns (proto.Message) {}
 }

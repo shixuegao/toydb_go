@@ -3,8 +3,7 @@ syntax="proto3";
 package proto;
 import "google/protobuf/any.proto";
 import "grpc/proto/event.proto";
-// import "proto/event.proto";
-option go_package = "proto/";
+option go_package = "./grpc/proto;proto";
 
 enum AddrType {
     PEERS = 0;

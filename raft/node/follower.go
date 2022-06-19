@@ -5,11 +5,12 @@ import (
 	"sxg/toydb_go/grpc/proto"
 	"sxg/toydb_go/raft"
 
+	"github.com/pkg/errors"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type follower struct {
-	comm     *Commission
+	comm     *commission
 	leader   string
 	votedFor string
 }
@@ -31,30 +32,30 @@ func (fol *follower) becomeFollower(leader string, term uint64) error {
 	fol.leader = leader
 	fol.votedFor = votedFor
 	if err := fol.comm.node.abortProxied("follower converts to follower"); err != nil {
-		return fmt.Errorf("abort proxied failed: %s", err.Error())
+		return fmt.Errorf("abort proxied failed: %+v", errors.WithStack(err))
 	}
 	if err := fol.comm.node.forwardQueued(address(proto.AddrType_PEER, leader)); err != nil {
-		return fmt.Errorf("forward queued failed: %s", err.Error())
+		return fmt.Errorf("forward queued failed: %+v", errors.WithStack(err))
 	}
 	return nil
 }
 
-func (fol *follower) step(input *raft.InputMsg) {
+func (fol *follower) step(cas *raft.Case) {
 	//如果信息是其他节点发过来的，且对方的Term比本地的大或者本地leader为空，则考虑重置当前节点，并继续处理msg
 	//这里保证follower能够跟随当前最高的Term
-	msg := input.Msg
+	msg := cas.Msg
 	if msg.From.AddrType == proto.AddrType_PEER &&
 		(msg.Term > fol.comm.term() || fol.leader == "") {
 		if err := fol.becomeFollower(msg.From.Peer, msg.Term); err != nil {
 			fol.comm.logger.Error(err.Error())
 		}
-		fol.step(input)
+		fol.step(cas)
 		return
 	}
 	if fol.leader == msg.From.Peer {
 		//ticks
 	}
-	switch v := input.Event.(type) {
+	switch v := cas.Event.(type) {
 	case *proto.HeartbeatEvent:
 		if fol.leader != msg.From.Peer {
 			return
@@ -63,7 +64,7 @@ func (fol *follower) step(input *raft.InputMsg) {
 		curCommitIndex := fol.comm.log().CommitIndex()
 		if has && v.CommitIndex > curCommitIndex {
 			if err := fol.comm.log().Commit(v.CommitIndex); err != nil {
-				fol.comm.logger.Errorf("commit raft log failed: %s", err.Error())
+				fol.comm.logger.Errorf("commit raft log failed: %+v", errors.WithStack(err))
 				return
 			}
 			scan := fol.comm.log().Scan(curCommitIndex+1, v.CommitIndex)
@@ -80,8 +81,8 @@ func (fol *follower) step(input *raft.InputMsg) {
 			CommitIndex:  v.CommitIndex,
 			HasCommitted: has,
 		}
-		if err := fol.comm.node.send(msg.From, event); err != nil {
-			fol.comm.logger.Errorf("send confirm leader event failed: %s", err.Error())
+		if err := fol.comm.node.send(cas.ID, msg.From, event); err != nil {
+			fol.comm.logger.Errorf("send confirm leader event failed: %+v", errors.WithStack(err))
 		}
 	case *proto.SolicitVoteEvent:
 		if fol.votedFor != "" && fol.votedFor != msg.From.Peer {
@@ -95,8 +96,8 @@ func (fol *follower) step(input *raft.InputMsg) {
 		if msg.From.AddrType == proto.AddrType_PEER {
 			fol.comm.logger.Infof("voting for %s in term %d election", msg.From.Peer, fol.comm.term())
 			event := &proto.GrantVoteEvent{}
-			if err := fol.comm.node.send(msg.From, event); err != nil {
-				fol.comm.logger.Errorf("send grant vote event failed: %s", err.Error())
+			if err := fol.comm.node.send(cas.ID, msg.From, event); err != nil {
+				fol.comm.logger.Errorf("send grant vote event failed: %+v", errors.WithStack(err))
 				return
 			}
 			fol.comm.log().SaveTerm(fol.comm.term(), msg.From.Peer)
@@ -111,13 +112,13 @@ func (fol *follower) step(input *raft.InputMsg) {
 		} else {
 			lastIndex, err := fol.comm.log().Splice(v.Entries)
 			if err != nil {
-				fol.comm.logger.Errorf("splice entries failed: %s", err.Error())
+				fol.comm.logger.Errorf("splice entries failed: %+v", errors.WithStack(err))
 				return
 			}
 			event := &proto.AcceptEntriesEvent{
 				LastIndex: lastIndex,
 			}
-			fol.comm.node.send(msg.From, event)
+			fol.comm.node.send(cas.ID, msg.From, event)
 		}
 	case *proto.ClientRequestEvent:
 		if fol.leader != "" {
@@ -126,8 +127,8 @@ func (fol *follower) step(input *raft.InputMsg) {
 				AddrType: proto.AddrType_PEER,
 				Peer:     fol.leader,
 			}
-			if err := fol.comm.node.send(addr, msg.Event); err != nil {
-				fol.comm.logger.Errorf("send client request event failed: %s", err.Error())
+			if err := fol.comm.node.send(cas.ID, addr, msg.Event); err != nil {
+				fol.comm.logger.Errorf("send client request event failed: %+v", errors.WithStack(err))
 			}
 		} else {
 			//将客户端的请求先保存下来，之后再转发出去
@@ -135,14 +136,14 @@ func (fol *follower) step(input *raft.InputMsg) {
 		}
 	case *proto.ClientResponseEvent:
 		if v.ResponseType == proto.RespType_RESP_STATUS {
-			status := input.ClientResponseContent.(*proto.Status)
+			status := cas.RespContent.(*proto.Status)
 			status.Server = fol.comm.id()
 			v.Content, _ = anypb.New(status)
 		}
 		fol.comm.node.unregisterProxiedRequest(v.Id)
 		addr := &proto.Address{AddrType: proto.AddrType_CLIENT}
-		if err := fol.comm.node.send(addr, v); err != nil {
-			fol.comm.logger.Errorf("send client response event failed: %s", err.Error())
+		if err := fol.comm.node.send(cas.ID, addr, v); err != nil {
+			fol.comm.logger.Errorf("send client response event failed: %+v", errors.WithStack(err))
 		}
 	case *proto.GrantVoteEvent: // do nothing
 	case *proto.ConfirmleaderEvent, *proto.AcceptEntriesEvent, *proto.RejectEntriesEvent:

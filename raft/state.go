@@ -2,12 +2,12 @@ package raft
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sxg/toydb_go/grpc/proto"
 	"sxg/toydb_go/logging"
 	"sync"
 
+	"github.com/pkg/errors"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -84,28 +84,29 @@ func (ins *InstructionVote) String() string {
 
 //driver
 type wrapper struct {
-	addr *proto.Address
-	id   string
+	caseId uint64
+	addr   *proto.Address
+	id     string
 }
 
 type Driver struct {
 	logger       logging.Logger
 	context      context.Context
 	insReceiver  <-chan Instruction
-	msgSender    chan<- *proto.Message
-	notify       map[string]*wrapper
+	caseInC      chan<- *Case
+	notify       map[uint64]*wrapper
 	queries      *queries
 	appliedIndex uint64
 }
 
 func NewDriver(context context.Context, insReceiver <-chan Instruction,
-	msgSender chan<- *proto.Message, logger logging.Logger) *Driver {
+	caseInC chan<- *Case, logger logging.Logger) *Driver {
 	return &Driver{
 		logger:       logger,
 		context:      context,
 		insReceiver:  insReceiver,
-		msgSender:    msgSender,
-		notify:       map[string]*wrapper{},
+		caseInC:      caseInC,
+		notify:       map[uint64]*wrapper{},
 		queries:      newQueries(),
 		appliedIndex: 0,
 	}
@@ -124,7 +125,7 @@ func (dri *Driver) Drive(state State, wg *sync.WaitGroup) {
 				bk = true
 			case ins := <-dri.insReceiver:
 				if err := dri.execute(ins, state); err != nil {
-					dri.logger.Errorf("excuting of driver exception: %s", err.Error())
+					dri.logger.Errorf("excuting of driver exception: %+v", errors.WithStack(err))
 					return
 				}
 			}
@@ -149,19 +150,19 @@ func (dri *Driver) execute(ins Instruction, state State) error {
 			if err != nil {
 				return err
 			}
-			dri.notifyApplied(result)
+			dri.notifyApplied(v.Entry.Index, result)
 		}
 		dri.appliedIndex = v.Entry.Index
 		return dri.queryExecute(state)
 	case *InstructionNotify:
 		if v.Index > state.AppliedIndex() {
 			wra := &wrapper{addr: v.Addr, id: v.Id}
-			dri.notify[wra.id] = wra
+			dri.notify[v.Index] = wra
 		} else {
 			abort, _ := anypb.New(&proto.Abort{Reason: "Index is applied"})
 			event := &proto.ClientResponseEvent{Id: v.Id, ResponseType: proto.RespType_RESP_ABORT, Content: abort}
 			if err := dri.sendToClient(v.Addr, event); err != nil {
-				dri.logger.Errorf("sending abort to client failed: %s", err.Error())
+				dri.logger.Errorf("sending abort to client failed: %+v", errors.WithStack(err))
 			}
 		}
 	case *InstructionQuery:
@@ -171,7 +172,7 @@ func (dri *Driver) execute(ins Instruction, state State) error {
 		status, _ := anypb.New(v.Status)
 		event := &proto.ClientResponseEvent{Id: v.Id, ResponseType: proto.RespType_RESP_STATUS, Content: status}
 		if err := dri.sendToClient(v.Addr, event); err != nil {
-			dri.logger.Errorf("sending status to client failed: %s", err.Error())
+			dri.logger.Errorf("sending status to client failed: %+v", errors.WithStack(err))
 		}
 	case *InstructionVote:
 		dri.queryVote(v.Term, v.Index, v.Addr)
@@ -194,7 +195,7 @@ func (dri *Driver) queryExecute(state State) error {
 		content, _ := anypb.New(&proto.State{Result: result})
 		response := &proto.ClientResponseEvent{Id: query.id, ResponseType: proto.RespType_RESP_STATE, Content: content}
 		if err := dri.sendToClient(query.addr, response); err != nil {
-			dri.logger.Errorf("sending state to client failed: %s", err.Error())
+			dri.logger.Errorf("sending state to client failed: %+v", errors.WithStack(err))
 		}
 	}
 	return nil
@@ -236,7 +237,7 @@ func (dri *Driver) queryVote(term uint64, index uint64, addr *proto.Address) {
 
 func (dri *Driver) notifyAbort(reason string) {
 	notify := dri.notify
-	dri.notify = map[string]*wrapper{}
+	dri.notify = map[uint64]*wrapper{}
 	abort, _ := anypb.New(&proto.Abort{Reason: reason})
 	for _, wrapper := range notify {
 		event := &proto.ClientResponseEvent{
@@ -245,7 +246,7 @@ func (dri *Driver) notifyAbort(reason string) {
 			Content:      abort,
 		}
 		if err := dri.sendToClient(wrapper.addr, event); err != nil {
-			dri.logger.Errorf("sending abort to client failed: %s", err.Error())
+			dri.logger.Errorf("sending abort to client failed: %+v", errors.WithStack(err))
 		}
 	}
 }
@@ -262,14 +263,23 @@ func (dri *Driver) queryAbort(reason string) {
 				Content:      abort,
 			}
 			if err := dri.sendToClient(q.addr, event); err != nil {
-				dri.logger.Errorf("sending abort to client failed: %s", err.Error())
+				dri.logger.Errorf("sending abort to client failed: %+v", errors.WithStack(err))
 			}
 		})
 	})
 }
 
-func (dri *Driver) notifyApplied(result []byte) {
-
+func (dri *Driver) notifyApplied(index uint64, result []byte) {
+	if v, ok := dri.notify[index]; ok {
+		delete(dri.notify, index)
+		state, _ := anypb.New(&proto.State{Result: result})
+		event := &proto.ClientResponseEvent{
+			Id:           v.id,
+			ResponseType: proto.RespType_RESP_STATE,
+			Content:      state,
+		}
+		dri.sendToClient(v.addr, event)
+	}
 }
 
 //发送信息到client，因此term可以为0
@@ -291,6 +301,6 @@ func (dri *Driver) sendToClient(to *proto.Address, event any) (err error) {
 		To:    to,
 		Event: eve,
 	}
-	dri.msgSender <- msg
+	dri.caseInC <- &Case{Msg: msg, Event: v}
 	return nil
 }

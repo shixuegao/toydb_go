@@ -2,9 +2,8 @@ syntax="proto3";
 
 package proto;
 import "grpc/proto/entry.proto";
-// import "proto/entry.proto";
 import "google/protobuf/any.proto";
-option go_package = "proto/";
+option go_package = "./grpc/proto;proto";
 
 //事件类型
 enum EventType {

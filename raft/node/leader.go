@@ -7,11 +7,12 @@ import (
 	store "sxg/toydb_go/storage/log"
 	"sxg/toydb_go/util"
 
+	"github.com/pkg/errors"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type leader struct {
-	comm          *Commission
+	comm          *commission
 	peerNextIndex map[string]uint64
 	peerLastIndex map[string]uint64
 }
@@ -37,7 +38,7 @@ func (lea *leader) append(p []byte) (index uint64, err error) {
 	}
 	for _, peer := range lea.comm.node.peers {
 		if e := lea.replicate(peer); e != nil {
-			lea.comm.logger.Errorf("replicate raft log to peer %s failed: %s", peer, e.Error())
+			lea.comm.logger.Errorf("replicate raft log to peer %s failed: %+v", peer, errors.WithStack(e))
 		}
 	}
 	return
@@ -70,7 +71,7 @@ func (lea *leader) replicate(peer string) error {
 		BaseTerm:  baseTerm,
 		Entries:   scan.Split(start, end),
 	}
-	if err := lea.comm.node.send(addr, event); err != nil {
+	if err := lea.comm.node.send(0, addr, event); err != nil {
 		return err
 	}
 	return nil
@@ -105,22 +106,22 @@ func (lea *leader) commit() error {
 	return nil
 }
 
-func (lea *leader) step(input *raft.InputMsg) {
-	msg := input.Msg
+func (lea *leader) step(cas *raft.Case) {
+	msg := cas.Msg
 	if msg.Term > lea.comm.term() &&
 		msg.From.AddrType == proto.AddrType_PEER {
 		if err := lea.becomeFollower(msg.From.Peer, msg.Term); err != nil {
-			lea.comm.logger.Errorf("leader convert to follower failed: %s", err.Error())
+			lea.comm.logger.Errorf("leader convert to follower failed: %+v", errors.WithStack(err))
 			return
 		}
 		fol := lea.comm.curRole().(*follower)
-		fol.step(input)
+		fol.step(cas)
 		return
 	}
 
 	event, err := msg.Event.UnmarshalNew()
 	if err != nil {
-		lea.comm.logger.Errorf("unknown proto message: %s", err.Error())
+		lea.comm.logger.Errorf("unknown proto message: %+v", errors.WithStack(err))
 		return
 	}
 	switch v := event.(type) {
@@ -135,7 +136,7 @@ func (lea *leader) step(input *raft.InputMsg) {
 			lea.comm.node.sendIns(ins)
 			if !v.HasCommitted {
 				if err := lea.replicate(msg.From.Peer); err != nil {
-					lea.comm.logger.Errorf("replicating raft log to %s failed: %s", msg.From.Peer, err.Error())
+					lea.comm.logger.Errorf("replicating raft log to %s failed: %+v", msg.From.Peer, errors.WithStack(err))
 				}
 			}
 		}
@@ -145,7 +146,7 @@ func (lea *leader) step(input *raft.InputMsg) {
 			lea.peerNextIndex[msg.From.Peer] = v.LastIndex + 1
 		}
 		if err := lea.commit(); err != nil {
-			lea.comm.logger.Errorf("committing failed: %s", err.Error())
+			lea.comm.logger.Errorf("committing failed: %+v", errors.WithStack(err))
 		}
 	case *proto.RejectEntriesEvent:
 		if msg.From.AddrType == proto.AddrType_PEER {
@@ -153,28 +154,29 @@ func (lea *leader) step(input *raft.InputMsg) {
 				lea.peerNextIndex[msg.From.Peer] = nextIndex - 1
 			}
 			if err := lea.replicate(msg.From.Peer); err != nil {
-				lea.comm.logger.Errorf("replicating raft log to %s failed: %s", msg.From.Peer, err.Error())
+				lea.comm.logger.Errorf("replicating raft log to %s failed: %+v", msg.From.Peer, errors.WithStack(err))
 			}
 		}
 	case *proto.SolicitVoteEvent, *proto.GrantVoteEvent: // do nothing
 	case *proto.ClientRequestEvent:
-		lea.handleClientRequest(msg, v)
+		lea.handleClientRequest(cas, v)
 	case *proto.ClientResponseEvent:
 		if v.ResponseType == proto.RespType_RESP_STATUS {
-			status := input.ClientResponseContent.(*proto.Status)
+			status := cas.RespContent.(*proto.Status)
 			status.Server = lea.comm.id()
 			v.Content, _ = anypb.New(status)
 		}
 		addr := &proto.Address{AddrType: proto.AddrType_CLIENT}
-		if err := lea.comm.node.send(addr, v); err != nil {
-			lea.comm.logger.Errorf("sending client response event failed: %s", err.Error())
+		if err := lea.comm.node.send(cas.ID, addr, v); err != nil {
+			lea.comm.logger.Errorf("sending client response event failed: %+v", errors.WithStack(err))
 		}
 	case *proto.HeartbeatEvent, *proto.ReplicateEntriesEvent:
 		lea.comm.logger.Warnf("received unexpected message: %s", msg.String())
 	}
 }
 
-func (lea *leader) handleClientRequest(msg *proto.Message, req *proto.ClientRequestEvent) {
+func (lea *leader) handleClientRequest(cas *raft.Case, req *proto.ClientRequestEvent) {
+	msg := cas.Msg
 	if req.RequestType == proto.ReqType_REQ_QUERY {
 		ins := &raft.InstructionQuery{
 			Id:      req.Id,
@@ -192,14 +194,14 @@ func (lea *leader) handleClientRequest(msg *proto.Message, req *proto.ClientRequ
 				CommitIndex: index,
 				CommitTerm:  term,
 			}
-			if err := lea.comm.node.send(addr, event); err != nil {
-				lea.comm.logger.Errorf("sending heartbeat failed: %s", err.Error())
+			if err := lea.comm.node.send(cas.ID, addr, event); err != nil {
+				lea.comm.logger.Errorf("sending heartbeat failed: %+v", errors.WithStack(err))
 			}
 		}
 	} else if req.RequestType == proto.ReqType_REQ_MUTATE {
 		index, err := lea.append(req.Command)
 		if err != nil {
-			lea.comm.logger.Errorf("appending mutate command failed: %s", err.Error())
+			lea.comm.logger.Errorf("appending mutate command failed: %+v", errors.WithStack(err))
 			return
 		}
 		ins := &raft.InstructionNotify{
@@ -211,7 +213,7 @@ func (lea *leader) handleClientRequest(msg *proto.Message, req *proto.ClientRequ
 		//单机的情况下，直接commit
 		if len(lea.comm.node.peers) == 0 {
 			if err := lea.commit(); err != nil {
-				lea.comm.logger.Errorf("committing failed: %s", err.Error())
+				lea.comm.logger.Errorf("committing failed: %+v", errors.WithStack(err))
 			}
 		}
 	} else if req.RequestType == proto.ReqType_REQ_STATUS {
